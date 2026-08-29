@@ -80,7 +80,13 @@ function parseDetections(
   for (let i = 0; i < count; i += 1) {
     const confidence = Number(scores[i]);
     if (!Number.isFinite(confidence) || confidence < threshold) continue;
-    const values = [Number(boxes[i * boxStride]), Number(boxes[i * boxStride + 1]), Number(boxes[i * boxStride + 2]), Number(boxes[i * boxStride + 3])];
+    const offset = i * boxStride;
+    // The Hugging Face standalone BlazeFace export stores detections as
+    // [top_y, top_x, bottom_y, bottom_x, landmarks...]. Simpler exports use
+    // [x1, y1, x2, y2], so support both layouts.
+    const values = boxStride >= 16
+      ? [Number(boxes[offset + 1]), Number(boxes[offset]), Number(boxes[offset + 3]), Number(boxes[offset + 2])]
+      : [Number(boxes[offset]), Number(boxes[offset + 1]), Number(boxes[offset + 2]), Number(boxes[offset + 3])];
     if (values.some(value => !Number.isFinite(value))) continue;
 
     // Accept either normalized coordinates or pixel coordinates.
@@ -108,16 +114,29 @@ export async function detectFaces(bitmap: ImageBitmap): Promise<FaceRegion[]> {
   if (!context) return [];
   context.drawImage(bitmap, 0, 0, INPUT_SIZE, INPUT_SIZE);
   const pixels = context.getImageData(0, 0, INPUT_SIZE, INPUT_SIZE).data;
-  const input = new Float32Array(INPUT_SIZE * INPUT_SIZE * 3);
-  for (let i = 0, j = 0; i < pixels.length; i += 4) {
-    input[j++] = pixels[i] / 255;
-    input[j++] = pixels[i + 1] / 255;
-    input[j++] = pixels[i + 2] / 255;
+  // BlazeFace ONNX exports use NCHW layout: [1, 3, 128, 128].
+  const plane = INPUT_SIZE * INPUT_SIZE;
+  const input = new Float32Array(plane * 3);
+  for (let i = 0; i < plane; i += 1) {
+    input[i] = pixels[i * 4] / 255;
+    input[plane + i] = pixels[i * 4 + 1] / 255;
+    input[plane * 2 + i] = pixels[i * 4 + 2] / 255;
   }
 
-  const inputName = session.inputNames[0];
-  const tensor = new ort.Tensor('float32', input, [1, INPUT_SIZE, INPUT_SIZE, 3]);
-  const outputs = await session.run({ [inputName]: tensor });
+  const feeds: Record<string, ort.Tensor> = {};
+  for (const name of session.inputNames) {
+    if (/image|input/i.test(name)) {
+      feeds[name] = new ort.Tensor('float32', input, [1, 3, INPUT_SIZE, INPUT_SIZE]);
+    } else if (/conf|threshold/i.test(name)) {
+      feeds[name] = new ort.Tensor('float32', new Float32Array([Number(import.meta.env.VITE_SIH_BLAZEFACE_THRESHOLD ?? DEFAULT_THRESHOLD)]), [1]);
+    } else if (/max.*det/i.test(name)) {
+      feeds[name] = new ort.Tensor('int64', new BigInt64Array([25n]), [1]);
+    } else if (/iou/i.test(name)) {
+      feeds[name] = new ort.Tensor('float32', new Float32Array([0.3]), [1]);
+    }
+  }
+  if (Object.keys(feeds).length !== session.inputNames.length) return [];
+  const outputs = await session.run(feeds);
   return parseDetections(outputs, bitmap.width, bitmap.height);
 }
 
