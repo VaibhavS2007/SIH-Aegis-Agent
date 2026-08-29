@@ -98,26 +98,7 @@ function parseDetections(
     const normalized = values.every(value => value >= -1 && value <= 1);
     const scaleX = normalized ? width : 1;
     const scaleY = normalized ? height : 1;
-    let [x1, y1, x2, y2] = [values[0] * scaleX, values[1] * scaleY, values[2] * scaleX, values[3] * scaleY];
-    if (boxStride >= 16 && normalized) {
-      // Use the eye/nose/mouth landmarks to tighten the privacy region. The
-      // exported detection box often includes a large head/scene area when a
-      // face occupies only a small part of a screenshot tile.
-      const landmarkXs = [0, 2, 4, 6].map(index => Number(boxes[offset + 4 + index]));
-      const landmarkYs = [1, 3, 5, 7].map(index => Number(boxes[offset + 4 + index]));
-      const landmarkMinX = Math.min(...landmarkXs) * width;
-      const landmarkMaxX = Math.max(...landmarkXs) * width;
-      const landmarkMinY = Math.min(...landmarkYs) * height;
-      const landmarkMaxY = Math.max(...landmarkYs) * height;
-      const landmarkSize = Math.max(landmarkMaxX - landmarkMinX, landmarkMaxY - landmarkMinY);
-      if (Number.isFinite(landmarkSize) && landmarkSize > 2) {
-        const margin = landmarkSize * 0.35;
-        x1 = Math.max(x1, landmarkMinX - margin);
-        y1 = Math.max(y1, landmarkMinY - margin);
-        x2 = Math.min(x2, landmarkMaxX + margin);
-        y2 = Math.min(y2, landmarkMaxY + margin);
-      }
-    }
+    const [x1, y1, x2, y2] = [values[0] * scaleX, values[1] * scaleY, values[2] * scaleX, values[3] * scaleY];
     const left = Math.max(0, Math.min(x1, x2));
     const top = Math.max(0, Math.min(y1, y2));
     const right = Math.min(width, Math.max(x1, x2));
@@ -246,7 +227,9 @@ export async function redactFacesFromBase64(base64: string): Promise<string> {
     context.filter = 'blur(18px)';
     for (const region of regions) {
       const [x, y, width, height] = region.bbox;
-      const padding = Math.max(width, height) * 0.05;
+      // Preserve the complete detector box; a modest margin catches the
+      // forehead/chin without masking surrounding cards or text.
+      const padding = Math.max(width, height) * 0.1;
       context.drawImage(bitmap, Math.max(0, x - padding), Math.max(0, y - padding), width + padding * 2, height + padding * 2, Math.max(0, x - padding), Math.max(0, y - padding), width + padding * 2, height + padding * 2);
     }
     context.filter = 'none';
