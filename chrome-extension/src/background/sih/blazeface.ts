@@ -7,7 +7,9 @@ export interface FaceRegion {
 }
 
 const INPUT_SIZE = 128;
-const DEFAULT_THRESHOLD = 0.65;
+// A low threshold is intentional for privacy: uncertain face regions are
+// blurred instead of being risked as unredacted pixels.
+const DEFAULT_THRESHOLD = 0.1;
 
 let sessionPromise: Promise<ort.InferenceSession | null> | null = null;
 
@@ -70,15 +72,18 @@ function parseDetections(
   const scoreTensor = tensors.find(t => t !== boxTensor && t.data.length >= 1);
   const boxes = outputArray(boxTensor);
   const scores = outputArray(scoreTensor);
-  if (!boxes || !scores) return [];
+  if (!boxes) return [];
 
   const threshold = Number(import.meta.env.VITE_SIH_BLAZEFACE_THRESHOLD ?? DEFAULT_THRESHOLD);
   const boxStride = boxTensor!.dims[boxTensor!.dims.length - 1];
-  const count = Math.min(Math.floor(boxes.length / boxStride), scores.length);
+  // The selectedBoxes export already applies confidence/NMS and may omit a
+  // separate score output. In that case each returned row is trusted because
+  // the threshold was supplied as an input to the model.
+  const count = Math.floor(boxes.length / boxStride);
   const regions: FaceRegion[] = [];
 
   for (let i = 0; i < count; i += 1) {
-    const confidence = Number(scores[i]);
+    const confidence = scores ? Number(scores[i]) : 1;
     if (!Number.isFinite(confidence) || confidence < threshold) continue;
     const offset = i * boxStride;
     // The Hugging Face standalone BlazeFace export stores detections as
