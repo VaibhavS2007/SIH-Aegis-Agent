@@ -7,9 +7,9 @@ export interface FaceRegion {
 }
 
 const INPUT_SIZE = 128;
-// A low threshold is intentional for privacy: uncertain face regions are
-// blurred instead of being risked as unredacted pixels.
-const DEFAULT_THRESHOLD = 0.1;
+// Calibrated for the small, standalone BlazeFace export used by the demo.
+// DOM/PII rules remain conservative; this avoids large low-confidence image masks.
+const DEFAULT_THRESHOLD = 0.5;
 
 let sessionPromise: Promise<ort.InferenceSession | null> | null = null;
 
@@ -98,7 +98,26 @@ function parseDetections(
     const normalized = values.every(value => value >= -1 && value <= 1);
     const scaleX = normalized ? width : 1;
     const scaleY = normalized ? height : 1;
-    const [x1, y1, x2, y2] = [values[0] * scaleX, values[1] * scaleY, values[2] * scaleX, values[3] * scaleY];
+    let [x1, y1, x2, y2] = [values[0] * scaleX, values[1] * scaleY, values[2] * scaleX, values[3] * scaleY];
+    if (boxStride >= 16 && normalized) {
+      // Use the eye/nose/mouth landmarks to tighten the privacy region. The
+      // exported detection box often includes a large head/scene area when a
+      // face occupies only a small part of a screenshot tile.
+      const landmarkXs = [0, 2, 4, 6].map(index => Number(boxes[offset + 4 + index]));
+      const landmarkYs = [1, 3, 5, 7].map(index => Number(boxes[offset + 4 + index]));
+      const landmarkMinX = Math.min(...landmarkXs) * width;
+      const landmarkMaxX = Math.max(...landmarkXs) * width;
+      const landmarkMinY = Math.min(...landmarkYs) * height;
+      const landmarkMaxY = Math.max(...landmarkYs) * height;
+      const landmarkSize = Math.max(landmarkMaxX - landmarkMinX, landmarkMaxY - landmarkMinY);
+      if (Number.isFinite(landmarkSize) && landmarkSize > 2) {
+        const margin = landmarkSize * 0.35;
+        x1 = Math.max(x1, landmarkMinX - margin);
+        y1 = Math.max(y1, landmarkMinY - margin);
+        x2 = Math.min(x2, landmarkMaxX + margin);
+        y2 = Math.min(y2, landmarkMaxY + margin);
+      }
+    }
     const left = Math.max(0, Math.min(x1, x2));
     const top = Math.max(0, Math.min(y1, y2));
     const right = Math.min(width, Math.max(x1, x2));
@@ -110,16 +129,37 @@ function parseDetections(
   return regions;
 }
 
-export async function detectFaces(bitmap: ImageBitmap): Promise<FaceRegion[]> {
-  const session = await getSession();
-  if (!session) return [];
+function intersectionOverUnion(a: FaceRegion, b: FaceRegion): number {
+  const [ax, ay, aw, ah] = a.bbox;
+  const [bx, by, bw, bh] = b.bbox;
+  const left = Math.max(ax, bx);
+  const top = Math.max(ay, by);
+  const right = Math.min(ax + aw, bx + bw);
+  const bottom = Math.min(ay + ah, by + bh);
+  const intersection = Math.max(0, right - left) * Math.max(0, bottom - top);
+  const union = aw * ah + bw * bh - intersection;
+  return union > 0 ? intersection / union : 0;
+}
 
+function deduplicate(regions: FaceRegion[]): FaceRegion[] {
+  return regions
+    .sort((a, b) => b.confidence - a.confidence)
+    .filter((region, index, all) => all.slice(0, index).every(previous => intersectionOverUnion(region, previous) < 0.35));
+}
+
+async function inferTile(
+  session: ort.InferenceSession,
+  bitmap: ImageBitmap,
+  sourceX: number,
+  sourceY: number,
+  sourceWidth: number,
+  sourceHeight: number,
+): Promise<FaceRegion[]> {
   const canvas = new OffscreenCanvas(INPUT_SIZE, INPUT_SIZE);
   const context = canvas.getContext('2d', { willReadFrequently: true });
   if (!context) return [];
-  context.drawImage(bitmap, 0, 0, INPUT_SIZE, INPUT_SIZE);
+  context.drawImage(bitmap, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, INPUT_SIZE, INPUT_SIZE);
   const pixels = context.getImageData(0, 0, INPUT_SIZE, INPUT_SIZE).data;
-  // BlazeFace ONNX exports use NCHW layout: [1, 3, 128, 128].
   const plane = INPUT_SIZE * INPUT_SIZE;
   const input = new Float32Array(plane * 3);
   for (let i = 0; i < plane; i += 1) {
@@ -141,8 +181,29 @@ export async function detectFaces(bitmap: ImageBitmap): Promise<FaceRegion[]> {
     }
   }
   if (Object.keys(feeds).length !== session.inputNames.length) return [];
-  const outputs = await session.run(feeds);
-  return parseDetections(outputs, bitmap.width, bitmap.height);
+  const localRegions = parseDetections(await session.run(feeds), sourceWidth, sourceHeight);
+  return localRegions.map(region => ({
+    ...region,
+    bbox: [region.bbox[0] + sourceX, region.bbox[1] + sourceY, region.bbox[2], region.bbox[3]],
+  }));
+}
+
+export async function detectFaces(bitmap: ImageBitmap): Promise<FaceRegion[]> {
+  const session = await getSession();
+  if (!session) return [];
+  const tileSize = Math.min(768, Math.max(bitmap.width, bitmap.height));
+  const stride = Math.max(256, Math.floor(tileSize * 0.75));
+  const regions: FaceRegion[] = [];
+  for (let y = 0; y < bitmap.height; y += stride) {
+    for (let x = 0; x < bitmap.width; x += stride) {
+      const width = Math.min(tileSize, bitmap.width - x);
+      const height = Math.min(tileSize, bitmap.height - y);
+      regions.push(...(await inferTile(session, bitmap, x, y, width, height)));
+      if (x + width >= bitmap.width) break;
+    }
+    if (y + Math.min(tileSize, bitmap.height - y) >= bitmap.height) break;
+  }
+  return deduplicate(regions);
 }
 
 async function blobToBase64(blob: Blob): Promise<string> {
@@ -185,7 +246,7 @@ export async function redactFacesFromBase64(base64: string): Promise<string> {
     context.filter = 'blur(18px)';
     for (const region of regions) {
       const [x, y, width, height] = region.bbox;
-      const padding = Math.max(width, height) * 0.2;
+      const padding = Math.max(width, height) * 0.05;
       context.drawImage(bitmap, Math.max(0, x - padding), Math.max(0, y - padding), width + padding * 2, height + padding * 2, Math.max(0, x - padding), Math.max(0, y - padding), width + padding * 2, height + padding * 2);
     }
     context.filter = 'none';
