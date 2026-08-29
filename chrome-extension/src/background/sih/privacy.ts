@@ -7,6 +7,8 @@
  * regions to the same manifest later.
  */
 
+import { redactFacesFromBase64 } from './blazeface';
+
 export type RedactionKind = 'password' | 'email' | 'phone' | 'payment' | 'pii' | 'credential';
 
 export interface RedactionRegion {
@@ -152,7 +154,8 @@ export async function captureSanitizedVisibleTab(tabId: number): Promise<string>
 
   try {
     const captured = await chrome.tabs.captureVisibleTab({ format: 'jpeg', quality: 80 });
-    return captured.replace(/^data:image\/[^;]+;base64,/, '');
+    const base64 = captured.replace(/^data:image\/[^;]+;base64,/, '');
+    return await redactFacesFromBase64(base64);
   } finally {
     await chrome.scripting.executeScript({
       target,

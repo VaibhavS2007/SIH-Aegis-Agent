@@ -35,6 +35,17 @@ This is the first vertical slice. OCR/face-model adapters and a richer redaction
 manifest are deliberately isolated behind the same privacy module so they can be
 added without creating a second reasoning model or a second network path.
 
+## Local BlazeFace
+
+The extension includes an ONNX Runtime Web BlazeFace adapter in
+`chrome-extension/src/background/sih/blazeface.ts`. It prefers WebGPU and falls
+back to WASM. Put a compatible standalone BlazeFace ONNX model at
+`chrome-extension/public/models/blazeface.onnx`, or set
+`VITE_SIH_BLAZEFACE_MODEL_URL` to a local extension URL. Face boxes are detected
+in memory and blurred before the screenshot is passed to Qwen3-VL. The model
+and face pixels are never sent to FastAPI. If the model file is absent, the
+existing DOM/PII masks still run and the detector safely returns no regions.
+
 ## Verification
 
 Run the privacy unit tests with:

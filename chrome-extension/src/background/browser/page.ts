@@ -22,6 +22,7 @@ import { createLogger } from '@src/background/log';
 import { ClickableElementProcessor } from './dom/clickable/service';
 import { isUrlAllowed } from './util';
 import { captureSanitizedVisibleTab } from '../sih/privacy';
+import { redactFacesFromBase64 } from '../sih/blazeface';
 
 const logger = createLogger('Page');
 
@@ -556,7 +557,7 @@ export default class Page {
         }
       });
 
-      return screenshot as string;
+      return await redactFacesFromBase64(screenshot as string);
     } catch (error) {
       if (privacyOverlayCount > 0) {
         try {

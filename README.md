@@ -27,10 +27,11 @@ The extension does not store cloud API keys and does not call OpenRouter or othe
 - Email, phone-number and payment-number masking
 - Sanitization of page text before model prompts
 - Screenshot masking before visual context leaves the browser
+- Local BlazeFace face detection through ONNX Runtime Web (WebGPU/WASM)
 - Analytics disabled by default
 - Fail-closed text egress guard primitives
 
-Face detection, OCR, richer redaction manifests and the complete cross-browser action validator are planned next.
+OCR, richer redaction manifests and the complete cross-browser action validator are planned next. A compatible `blazeface.onnx` file must be supplied locally; the detector never sends images to the server.
 
 ## Repository layout
 
