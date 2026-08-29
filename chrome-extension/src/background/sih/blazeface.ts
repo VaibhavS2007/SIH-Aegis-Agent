@@ -133,8 +133,16 @@ async function blobToBase64(blob: Blob): Promise<string> {
 
 /** Blur detected faces in-memory before the screenshot is sent to the VLM. */
 export async function redactFacesFromBase64(base64: string): Promise<string> {
-  if (typeof createImageBitmap !== 'function' || typeof OffscreenCanvas === 'undefined') return base64;
+  if (typeof createImageBitmap !== 'function' || typeof OffscreenCanvas === 'undefined') {
+    throw new Error('SIH image APIs are unavailable; refusing visual egress');
+  }
   try {
+    // Do not allow a visual payload to leave the browser when the configured
+    // face model is unavailable. DOM/text-only tasks can still run, but vision
+    // tasks fail closed instead of silently sending unredacted pixels.
+    if (!(await getSession())) {
+      throw new Error('SIH face-redaction model is unavailable; refusing visual egress');
+    }
     const bytes = Uint8Array.from(atob(base64), character => character.charCodeAt(0));
     const bitmap = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }));
     const regions = await detectFaces(bitmap);
@@ -160,9 +168,7 @@ export async function redactFacesFromBase64(base64: string): Promise<string> {
     const output = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.8 });
     bitmap.close();
     return await blobToBase64(output);
-  } catch {
-    // Fail closed for detector errors by returning the DOM-sanitized image;
-    // callers can choose a stricter policy once the model is mandatory.
-    return base64;
+  } catch (error) {
+    throw error instanceof Error ? error : new Error('SIH face-redaction failed');
   }
 }

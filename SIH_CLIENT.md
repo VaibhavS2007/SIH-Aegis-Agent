@@ -44,7 +44,8 @@ back to WASM. Put a compatible standalone BlazeFace ONNX model at
 `VITE_SIH_BLAZEFACE_MODEL_URL` to a local extension URL. Face boxes are detected
 in memory and blurred before the screenshot is passed to Qwen3-VL. The model
 and face pixels are never sent to FastAPI. If the model file is absent, the
-existing DOM/PII masks still run and the detector safely returns no regions.
+existing DOM/PII masks still run, but visual egress fails closed until the
+model is available.
 
 ## Verification
 
