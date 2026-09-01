@@ -31,6 +31,7 @@ function installPreviewExtensionShim() {
       (Array.isArray(keys) ? keys : [keys]).forEach(key => delete values[key]);
     },
     clear: async () => Object.keys(values).forEach(key => delete values[key]),
+    onChanged: { addListener: (listener: (changes: Record<string, chrome.storage.StorageChange>) => void) => listeners.push(listener), removeListener: () => undefined },
   };
 
   const port = {
@@ -42,8 +43,9 @@ function installPreviewExtensionShim() {
   };
 
   const extensionChrome = {
-    storage: { local: area, sync: area, session: area, onChanged: { addListener: (listener: (changes: Record<string, chrome.storage.StorageChange>) => void) => listeners.push(listener) } },
+    storage: { local: area, sync: area, session: area, onChanged: { addListener: (listener: (changes: Record<string, chrome.storage.StorageChange>) => void) => listeners.push(listener), removeListener: () => undefined } },
     runtime: { connect: () => port, sendMessage: async () => undefined, getURL: (path: string) => path, openOptionsPage: () => undefined },
+    i18n: { getMessage: (key: string) => key },
     tabs: { query: async () => [], captureVisibleTab: async () => undefined },
   } as unknown as typeof chrome;
 
